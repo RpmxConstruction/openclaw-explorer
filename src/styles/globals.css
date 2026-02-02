@@ -1,0 +1,88 @@
+﻿@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+body {
+  background: #0a0a0f;
+  background-image:
+    radial-gradient(ellipse at 10% 20%, rgba(0, 240, 255, 0.08) 0%, transparent 50%),
+    radial-gradient(ellipse at 90% 80%, rgba(191, 0, 255, 0.08) 0%, transparent 50%);
+  font-family: 'JetBrains Mono', monospace;
+  color: #e0e0e0;
+}
+
+@keyframes pulse-cyan {
+  0%, 100% { filter: drop-shadow(0 0 8px #00f0ff); }
+  50% { filter: drop-shadow(0 0 16px #00f0ff); }
+}
+
+@keyframes pulse-purple {
+  0%, 100% { filter: drop-shadow(0 0 8px #bf00ff); }
+  50% { filter: drop-shadow(0 0 16px #bf00ff); }
+}
+
+@keyframes spin-reverse {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(-360deg); }
+}
+
+.spin-once {
+  animation: spin-reverse 0.5s ease-out;
+}
+
+.glow-cyan { filter: drop-shadow(0 0 8px #00f0ff); }
+.glow-purple { filter: drop-shadow(0 0 8px #bf00ff); }
+.glow-cyan-hover:hover { filter: drop-shadow(0 0 16px #00f0ff); }
+.glow-purple-hover:hover { filter: drop-shadow(0 0 16px #bf00ff); }
+
+/* ========== HIGH PERFORMANCE CHART OPTIMIZATIONS (120fps target) ========== */
+
+/* GPU compositing for SVG - forces layer creation */
+.tree-view-svg {
+  will-change: contents;
+}
+
+/* Main transform layer - optimized for smooth zoom/pan */
+.tree-view-content {
+  will-change: transform;
+}
+
+/* During active zoom/pan: disable expensive effects for maximum FPS */
+.tree-view-content.is-zooming * {
+  /* Disable all filters during interaction - massive FPS boost */
+  filter: none !important;
+  /* Disable transitions during zoom for immediate response */
+  transition: none !important;
+}
+
+/* Optimize text rendering - use GPU-friendly settings */
+.tree-view-content text {
+  text-rendering: optimizeSpeed;
+}
+
+/* When not zooming, allow smooth transitions */
+.tree-view-content:not(.is-zooming) g {
+  transition: filter 0.15s ease-out;
+}
+
+/* Group circle glow effects - using classes for better CSS control */
+.group-glow-cyan {
+  filter: drop-shadow(0 0 4px #00f0ff40);
+}
+
+.group-glow-purple {
+  filter: drop-shadow(0 0 4px #bf00ff40);
+}
+
+/* Tree node styling */
+.tree-node {
+  /* No transition-all! Only transition filter for hover effects */
+  transition: filter 0.15s ease-out;
+}
