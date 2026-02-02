@@ -38,6 +38,9 @@ const MAX_EXTENDED_DISTANCE = 500   // Maximum extra distance beyond minDistance
 export class SpatialLayoutManager {
   private occupiedRegions: Map<string, OccupiedRegion[]> = new Map()
   private folderDirections: Map<string, Direction> = new Map()
+  // Track which directions are used by siblings at each parent path
+  // Key: parent path (where siblings share), Value: Map of sibling path -> direction used
+  private siblingDirections: Map<string, Map<string, Direction>> = new Map()
   private config: SpatialLayoutConfig
   private viewport: ViewportBounds | null = null
 
@@ -85,6 +88,7 @@ export class SpatialLayoutManager {
    */
   clearDirections(): void {
     this.folderDirections.clear()
+    this.siblingDirections.clear()
   }
 
   /**
@@ -93,6 +97,70 @@ export class SpatialLayoutManager {
   reset(): void {
     this.clearRegions()
     this.clearDirections()
+  }
+
+  /**
+   * Get the parent path of a folder (the container where siblings exist)
+   */
+  private getSiblingParentPath(folderPath: string): string {
+    const lastSlash = folderPath.lastIndexOf('/')
+    if (lastSlash <= 0) return 'root'
+    return folderPath.substring(0, lastSlash)
+  }
+
+  /**
+   * Get directions already used by siblings of a folder
+   */
+  getUsedSiblingDirections(folderPath: string): Direction[] {
+    const parentPath = this.getSiblingParentPath(folderPath)
+    const siblingMap = this.siblingDirections.get(parentPath)
+    if (!siblingMap) return []
+
+    const usedDirections: Direction[] = []
+    for (const [sibPath, dir] of siblingMap.entries()) {
+      // Don't include our own direction
+      if (sibPath !== folderPath) {
+        usedDirections.push(dir)
+      }
+    }
+    return usedDirections
+  }
+
+  /**
+   * Register the direction used by a folder (for sibling tracking)
+   */
+  registerSiblingDirection(folderPath: string, direction: Direction): void {
+    const parentPath = this.getSiblingParentPath(folderPath)
+    if (!this.siblingDirections.has(parentPath)) {
+      this.siblingDirections.set(parentPath, new Map())
+    }
+    this.siblingDirections.get(parentPath)!.set(folderPath, direction)
+  }
+
+  /**
+   * Check if a direction is "too close" to directions already used by siblings.
+   * Returns true if the direction should be avoided.
+   */
+  isDirectionBlockedBySibling(direction: Direction, usedDirections: Direction[]): boolean {
+    // Consider directions within 45 degrees (π/4) as "too close"
+    const BLOCKING_ANGLE = Math.PI / 4
+
+    for (const usedDir of usedDirections) {
+      const angleDiff = Math.abs(this.normalizeAngle(direction.angle - usedDir.angle))
+      if (angleDiff < BLOCKING_ANGLE) {
+        return true
+      }
+    }
+    return false
+  }
+
+  /**
+   * Normalize angle to be between -π and π
+   */
+  private normalizeAngle(angle: number): number {
+    while (angle > Math.PI) angle -= 2 * Math.PI
+    while (angle < -Math.PI) angle += 2 * Math.PI
+    return angle
   }
 
   /**
@@ -207,6 +275,7 @@ export class SpatialLayoutManager {
    * Find the best position for children of a folder
    * Returns position and direction, considering:
    * - Previously assigned direction (for consistency)
+   * - Directions used by siblings (avoid to prevent connector overlap)
    * - Collision with existing regions
    * - Viewport bounds
    * - Extended distance fallback when all directions at default distance collide
@@ -218,14 +287,35 @@ export class SpatialLayoutManager {
     parentRadius: number,
     childRadius: number
   ): SpatialPosition {
+    // Get directions already used by siblings
+    const usedSiblingDirections = this.getUsedSiblingDirections(folderPath)
+
     // Sort directions by priority
     const sortedDirections = [...this.config.directions].sort((a, b) => a.priority - b.priority)
 
+    // Filter out directions blocked by siblings, but keep them as fallbacks
+    const unblockedDirections = sortedDirections.filter(
+      d => !this.isDirectionBlockedBySibling(d, usedSiblingDirections)
+    )
+    const blockedDirections = sortedDirections.filter(
+      d => this.isDirectionBlockedBySibling(d, usedSiblingDirections)
+    )
+
     // Check if this folder already has an assigned direction - try it first
     const existingDirection = this.folderDirections.get(folderPath)
-    const directionsToTry = existingDirection
-      ? [existingDirection, ...sortedDirections.filter(d => d.name !== existingDirection.name)]
-      : sortedDirections
+
+    // Build direction list: prioritize existing direction, then unblocked, then blocked
+    let directionsToTry: Direction[]
+    if (existingDirection) {
+      const isExistingBlocked = this.isDirectionBlockedBySibling(existingDirection, usedSiblingDirections)
+      if (isExistingBlocked) {
+        directionsToTry = [...unblockedDirections, existingDirection, ...blockedDirections.filter(d => d.name !== existingDirection.name)]
+      } else {
+        directionsToTry = [existingDirection, ...unblockedDirections.filter(d => d.name !== existingDirection.name), ...blockedDirections]
+      }
+    } else {
+      directionsToTry = [...unblockedDirections, ...blockedDirections]
+    }
 
     // Try at increasing distances until we find a collision-free position
     for (let extraDistance = 0; extraDistance <= MAX_EXTENDED_DISTANCE; extraDistance += DISTANCE_INCREMENT) {
@@ -272,6 +362,7 @@ export class SpatialLayoutManager {
    * Calculate position for both folder and file groups of expanded children
    * Handles the case where a folder has both folders and files as children
    * Uses extended distance fallback when all directions at default distance collide
+   * Now also avoids directions used by siblings to prevent connector line overlaps
    */
   findPositionsForChildren(
     parentPath: string,
@@ -290,14 +381,35 @@ export class SpatialLayoutManager {
 
     if (!hasFolders && !hasFiles) return result
 
+    // Get directions already used by siblings
+    const usedSiblingDirections = this.getUsedSiblingDirections(parentPath)
+
     // Get or determine the primary direction for this parent's children
     const existingDirection = this.folderDirections.get(parentPath)
     const sortedDirections = [...this.config.directions].sort((a, b) => a.priority - b.priority)
 
+    // Filter out directions blocked by siblings, but keep them as fallbacks
+    const unblockedDirections = sortedDirections.filter(
+      d => !this.isDirectionBlockedBySibling(d, usedSiblingDirections)
+    )
+    const blockedDirections = sortedDirections.filter(
+      d => this.isDirectionBlockedBySibling(d, usedSiblingDirections)
+    )
+
+    // Try unblocked directions first, then blocked ones as fallback
     // If there's an existing direction, try it first but still check for collisions
-    const directionsToTry = existingDirection
-      ? [existingDirection, ...sortedDirections.filter(d => d.name !== existingDirection.name)]
-      : sortedDirections
+    let directionsToTry: Direction[]
+    if (existingDirection) {
+      // If existing direction is unblocked, prioritize it
+      const isExistingBlocked = this.isDirectionBlockedBySibling(existingDirection, usedSiblingDirections)
+      if (isExistingBlocked) {
+        directionsToTry = [...unblockedDirections, existingDirection, ...blockedDirections.filter(d => d.name !== existingDirection.name)]
+      } else {
+        directionsToTry = [existingDirection, ...unblockedDirections.filter(d => d.name !== existingDirection.name), ...blockedDirections]
+      }
+    } else {
+      directionsToTry = [...unblockedDirections, ...blockedDirections]
+    }
 
     if (hasFolders && hasFiles) {
       // Both groups - position them side by side in the assigned direction
@@ -339,8 +451,9 @@ export class SpatialLayoutManager {
         )
       }
 
-      // Update direction assignment
+      // Update direction assignment and register for sibling tracking
       this.folderDirections.set(parentPath, bestDirection)
+      this.registerSiblingDirection(parentPath, bestDirection)
 
       if (bestPositions && bestDirection) {
         result.folderPosition = {
@@ -358,10 +471,18 @@ export class SpatialLayoutManager {
       result.folderPosition = this.findBestPosition(
         parentPath, parentX, parentY, parentRadius, folderGroupRadius
       )
+      // Register direction for sibling tracking
+      if (result.folderPosition) {
+        this.registerSiblingDirection(parentPath, result.folderPosition.direction)
+      }
     } else if (hasFiles) {
       result.filePosition = this.findBestPosition(
         parentPath, parentX, parentY, parentRadius, fileGroupRadius
       )
+      // Register direction for sibling tracking
+      if (result.filePosition) {
+        this.registerSiblingDirection(parentPath, result.filePosition.direction)
+      }
     }
 
     return result
