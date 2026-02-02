@@ -1,9 +1,29 @@
-﻿import { useRef, useEffect, useCallback, useMemo } from 'react'
+﻿import { useRef, useEffect, useCallback, useMemo, useState } from 'react'
 import * as d3 from 'd3'
 import { FileSystemItem } from '../../types'
 import GroupCircle, { calculateRadius } from './GroupCircle'
 import ConnectorLine from './ConnectorLine'
+import TreeNode from './TreeNode'
 import { SpatialLayoutManager } from './SpatialLayoutManager'
+
+// Neon color palette for folder identification
+const NEON_COLORS = [
+  '#00f0ff', // cyan
+  '#ff00ff', // magenta
+  '#00ff88', // green
+  '#ff6600', // orange
+  '#ffff00', // yellow
+  '#ff0066', // pink
+  '#00ffff', // aqua
+  '#ff3399', // hot pink
+  '#66ff00', // lime
+  '#9933ff', // purple
+  '#00ccff', // sky blue
+  '#ff9900', // amber
+  '#33ff99', // mint
+  '#ff0099', // rose
+  '#ccff00', // chartreuse
+]
 
 interface TreeViewProps {
   rootItems: FileSystemItem[]
@@ -11,10 +31,11 @@ interface TreeViewProps {
   childrenMap: Map<string, FileSystemItem[]>
   onExpand: (path: string) => void
   onFileClick: (path: string) => void
+  onReset: () => void
   lastExpandedPath: string | null
 }
 
-export default function TreeView({ rootItems, expandedPaths, childrenMap, onExpand, onFileClick, lastExpandedPath }: TreeViewProps) {
+export default function TreeView({ rootItems, expandedPaths, childrenMap, onExpand, onFileClick, onReset, lastExpandedPath }: TreeViewProps) {
   const svgRef = useRef<SVGSVGElement>(null)
   const gRef = useRef<SVGGElement>(null)
   const zoomRef = useRef<d3.ZoomBehavior<SVGSVGElement, unknown> | null>(null)
@@ -22,6 +43,22 @@ export default function TreeView({ rootItems, expandedPaths, childrenMap, onExpa
 
   // Create a stable SpatialLayoutManager instance
   const layoutManagerRef = useRef<SpatialLayoutManager>(new SpatialLayoutManager())
+
+  // Track assigned colors for expanded folders (persists across renders)
+  const [folderColors, setFolderColors] = useState<Map<string, string>>(new Map())
+  const colorIndexRef = useRef(0)
+
+  // Assign a color to a folder when it's expanded
+  const assignFolderColor = useCallback((folderPath: string) => {
+    setFolderColors(prev => {
+      if (prev.has(folderPath)) return prev
+      const newMap = new Map(prev)
+      const color = NEON_COLORS[colorIndexRef.current % NEON_COLORS.length]
+      colorIndexRef.current++
+      newMap.set(folderPath, color)
+      return newMap
+    })
+  }, [])
 
   useEffect(() => {
     if (!svgRef.current || !gRef.current) return
@@ -118,21 +155,23 @@ export default function TreeView({ rootItems, expandedPaths, childrenMap, onExpa
   
   const handleItemClick = useCallback((item: FileSystemItem) => {
     if (item.type === 'folder') {
+      // Assign a color when folder is expanded (if not already assigned)
+      assignFolderColor(item.path)
       onExpand(item.path)
     } else {
       onFileClick(item.path)
     }
-  }, [onExpand, onFileClick])
+  }, [onExpand, onFileClick, assignFolderColor])
   
   const rootFolders = rootItems.filter(i => i.type === 'folder')
   const rootFiles = rootItems.filter(i => i.type === 'file')
 
   const folderRadius = calculateRadius(rootFolders.length, rootFolders)
   const fileRadius = calculateRadius(rootFiles.length, rootFiles)
-  
+
   const rootY = 60
   const groupY = 200 + Math.max(folderRadius, fileRadius)
-  
+
   const hasBoth = rootFolders.length > 0 && rootFiles.length > 0
   const gap = 60
   const folderGroupX = hasBoth ? -(folderRadius + gap / 2) : 0
@@ -140,6 +179,24 @@ export default function TreeView({ rootItems, expandedPaths, childrenMap, onExpa
 
   // Memoize layout manager operations
   const layoutManager = layoutManagerRef.current
+
+  // Create a lookup map for folder items by path
+  const folderByPath = useMemo(() => {
+    const map = new Map<string, FileSystemItem>()
+    // Add root folders
+    for (const folder of rootFolders) {
+      map.set(folder.path, folder)
+    }
+    // Add all folders from childrenMap
+    for (const children of childrenMap.values()) {
+      for (const child of children) {
+        if (child.type === 'folder') {
+          map.set(child.path, child)
+        }
+      }
+    }
+    return map
+  }, [rootFolders, childrenMap])
 
   // Pre-calculated positions for all expanded nodes
   // This is computed in a single pass to ensure collision detection works correctly
@@ -301,17 +358,98 @@ export default function TreeView({ rootItems, expandedPaths, childrenMap, onExpa
     const isLastExpanded = parentPath === lastExpandedPath
     const innerElements: JSX.Element[] = []
 
+    // Get the assigned color for this parent folder
+    const parentColor = folderColors.get(parentPath)
+    // Find the parent folder item to render it at the connector origin
+    const parentFolderItem = folderByPath.get(parentPath)
+
+    // Calculate the direction from parent center toward children
+    // If we have both folders and files, use the midpoint; otherwise use the single target
+    let targetX: number, targetY: number
+    let childRadius: number
+    if (hasFolders && hasFiles) {
+      targetX = (folderX + fileX) / 2
+      targetY = (folderY + fileY) / 2
+      childRadius = Math.max(childFolderRadius, childFileRadius)
+    } else if (hasFolders) {
+      targetX = folderX
+      targetY = folderY
+      childRadius = childFolderRadius
+    } else {
+      targetX = fileX
+      targetY = fileY
+      childRadius = childFileRadius
+    }
+
+    // Calculate direction vector from parent center to target
+    const dx = targetX - parentX
+    const dy = targetY - parentY
+    const distanceToChild = Math.sqrt(dx * dx + dy * dy)
+
+    // Normalized direction
+    const ndx = distanceToChild > 0 ? dx / distanceToChild : 0
+    const ndy = distanceToChild > 0 ? dy / distanceToChild : 1
+
+    // Folder node dimensions - use half the height as radius (since it's a rounded rect)
+    const folderNodeHeight = 36
+    const folderNodeRadius = folderNodeHeight / 2  // Use half height for rounded rect edges
+
+    // Calculate the midpoint between parent edge and child edge for equidistant positioning
+    // Parent edge is at: parentRadius from parent center
+    // Child edge is at: distanceToChild - childRadius from parent center
+    // Midpoint = (parentRadius + (distanceToChild - childRadius)) / 2
+    const parentEdgeDist = parentRadius
+    const childEdgeDist = distanceToChild - childRadius
+    const midpointDist = (parentEdgeDist + childEdgeDist) / 2
+
+    // Position folder node center at the midpoint
+    const folderNodeX = parentX + ndx * midpointDist
+    const folderNodeY = parentY + ndy * midpointDist
+
+    // Connector from parent circle edge to folder node edge (straight line for short distance)
+    innerElements.push(
+      <ConnectorLine
+        key={`line-${parentPath}-to-node`}
+        fromX={parentX}
+        fromY={parentY}
+        toX={folderNodeX}
+        toY={folderNodeY}
+        isFolder={true}
+        sourceRadius={parentRadius}
+        targetRadius={folderNodeRadius}
+        color={parentColor}
+        straight={true}
+      />
+    )
+
+    // Render the parent folder node
+    if (parentFolderItem) {
+      innerElements.push(
+        <TreeNode
+          key={`parent-node-${parentPath}`}
+          item={parentFolderItem}
+          x={folderNodeX}
+          y={folderNodeY}
+          isExpanded={true}
+          onClick={() => handleItemClick(parentFolderItem)}
+          expandedColor={parentColor}
+        />
+      )
+    }
+
     if (hasFolders) {
+      // Connector from folder node to child folders circle
       innerElements.push(
         <ConnectorLine
           key={`line-${parentPath}-folders`}
-          fromX={parentX}
-          fromY={parentY}
+          fromX={folderNodeX}
+          fromY={folderNodeY}
           toX={folderX}
           toY={folderY}
           isFolder={true}
-          sourceRadius={parentRadius}
+          sourceRadius={folderNodeRadius}
           targetRadius={childFolderRadius}
+          color={parentColor}
         />
       )
       innerElements.push(
@@ -324,21 +462,24 @@ export default function TreeView({ rootItems, expandedPaths, childrenMap, onExpa
           isFolder={true}
           expandedPaths={expandedPaths}
           onItemClick={handleItemClick}
+          folderColors={folderColors}
         />
       )
     }
 
     if (hasFiles) {
+      // Connector from folder node to child files circle
       innerElements.push(
         <ConnectorLine
           key={`line-${parentPath}-files`}
-          fromX={parentX}
-          fromY={parentY}
+          fromX={folderNodeX}
+          fromY={folderNodeY}
           toX={fileX}
           toY={fileY}
           isFolder={false}
-          sourceRadius={parentRadius}
+          sourceRadius={folderNodeRadius}
           targetRadius={childFileRadius}
+          color={parentColor}
         />
       )
       innerElements.push(
@@ -351,6 +492,7 @@ export default function TreeView({ rootItems, expandedPaths, childrenMap, onExpa
           isFolder={false}
           expandedPaths={expandedPaths}
           onItemClick={handleItemClick}
+          folderColors={folderColors}
         />
       )
     }
@@ -393,7 +535,27 @@ export default function TreeView({ rootItems, expandedPaths, childrenMap, onExpa
   return (
     <svg ref={svgRef} className="w-full h-full tree-view-svg" style={{ cursor: 'grab' }}>
       <g ref={gRef} className="tree-view-content">
-        <text x={0} y={rootY - 30} textAnchor="middle" fill="#00f0ff" fontSize={16} fontWeight="bold" fontFamily="'JetBrains Mono', monospace" className="glow-cyan">ROOT</text>
+        {/* Root indicator with pulsing green circle - clickable to reset */}
+        <g
+          onClick={onReset}
+          style={{ cursor: 'pointer' }}
+          className="root-indicator"
+        >
+          {/* Pulsing background circle */}
+          <circle
+            cx={0}
+            cy={rootY - 35}
+            r={28}
+            fill="#00ff88"
+            stroke="#00ff88"
+            strokeWidth={2}
+            style={{
+              animation: 'root-pulse 3s ease-in-out infinite',
+              transformOrigin: '0px ' + (rootY - 35) + 'px',
+            }}
+          />
+          <text x={0} y={rootY - 30} textAnchor="middle" fill="#00f0ff" fontSize={16} fontWeight="bold" fontFamily="'JetBrains Mono', monospace" className="glow-cyan">ROOT</text>
+        </g>
         
         {rootFolders.length > 0 && (
           <ConnectorLine 
@@ -417,25 +579,27 @@ export default function TreeView({ rootItems, expandedPaths, childrenMap, onExpa
         )}
         
         {rootFolders.length > 0 && (
-          <GroupCircle 
-            label="FOLDERS" 
-            items={rootFolders} 
-            cx={folderGroupX} 
-            cy={groupY} 
-            isFolder={true} 
-            expandedPaths={expandedPaths} 
-            onItemClick={handleItemClick} 
+          <GroupCircle
+            label="FOLDERS"
+            items={rootFolders}
+            cx={folderGroupX}
+            cy={groupY}
+            isFolder={true}
+            expandedPaths={expandedPaths}
+            onItemClick={handleItemClick}
+            folderColors={folderColors}
           />
         )}
         {rootFiles.length > 0 && (
-          <GroupCircle 
-            label="FILES" 
-            items={rootFiles} 
-            cx={fileGroupX} 
-            cy={groupY} 
-            isFolder={false} 
-            expandedPaths={expandedPaths} 
-            onItemClick={handleItemClick} 
+          <GroupCircle
+            label="FILES"
+            items={rootFiles}
+            cx={fileGroupX}
+            cy={groupY}
+            isFolder={false}
+            expandedPaths={expandedPaths}
+            onItemClick={handleItemClick}
+            folderColors={folderColors}
           />
         )}
         

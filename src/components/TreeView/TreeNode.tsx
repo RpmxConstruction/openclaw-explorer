@@ -7,20 +7,23 @@ interface TreeNodeProps {
   y: number
   isExpanded?: boolean
   onClick: () => void
+  /** Optional color override for expanded folders */
+  expandedColor?: string
 }
 
 // Memoized component to prevent unnecessary re-renders during zoom/pan
-const TreeNode = memo(function TreeNode({ item, x, y, isExpanded, onClick }: TreeNodeProps) {
+const TreeNode = memo(function TreeNode({ item, x, y, isExpanded, onClick, expandedColor }: TreeNodeProps) {
   const isFolder = item.type === 'folder'
   const width = Math.max(120, item.name.length * 10 + 40)
   const height = 36
 
-  const strokeColor = isFolder ? '#00f0ff' : '#bf00ff'
+  // Use expanded color if provided and folder is expanded, otherwise default colors
+  const strokeColor = (isExpanded && expandedColor) ? expandedColor : (isFolder ? '#00f0ff' : '#bf00ff')
   const glowClass = isFolder ? 'glow-cyan-hover' : 'glow-purple-hover'
 
   // Pre-compute filter style to avoid style recalculation
   const filterStyle = isExpanded
-    ? { filter: isFolder ? 'drop-shadow(0 0 12px #00f0ff)' : 'drop-shadow(0 0 12px #bf00ff)' }
+    ? { filter: `drop-shadow(0 0 12px ${strokeColor})` }
     : undefined
 
   return (

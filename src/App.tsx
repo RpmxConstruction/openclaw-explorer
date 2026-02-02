@@ -65,13 +65,19 @@ export default function App() {
 
   function handleFileClick(path: string) { setEditingFile(path) }
 
+  function handleReset() {
+    setExpandedPaths(new Set())
+    setNavStack([])
+    setLastExpandedPath(null)
+  }
+
   return (
     <div className="h-full flex flex-col">
       <Header source={source} onSourceChange={setSource} />
       <div className="flex-1 overflow-hidden relative">
         {loading && <div className="absolute inset-0 flex items-center justify-center"><div className="text-neon-cyan animate-pulse text-xl">Loading...</div></div>}
         {error && <div className="absolute inset-0 flex items-center justify-center"><div className="text-red-500 text-xl">{error}</div></div>}
-        {!loading && !error && <TreeView rootItems={rootItems} expandedPaths={expandedPaths} childrenMap={childrenMap} onExpand={handleExpand} onFileClick={handleFileClick} lastExpandedPath={lastExpandedPath} />}
+        {!loading && !error && <TreeView rootItems={rootItems} expandedPaths={expandedPaths} childrenMap={childrenMap} onExpand={handleExpand} onFileClick={handleFileClick} onReset={handleReset} lastExpandedPath={lastExpandedPath} />}
       </div>
       {editingFile && <Editor source={source} path={editingFile} onClose={() => setEditingFile(null)} />}
       <UndoButton canUndo={navStack.length > 0} onUndo={handleUndo} />

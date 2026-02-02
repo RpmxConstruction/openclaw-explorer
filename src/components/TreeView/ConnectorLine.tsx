@@ -6,10 +6,15 @@
   isFolder: boolean
   targetRadius?: number  // Circle radius to stop at edge
   sourceRadius?: number  // Source circle radius to start from edge
+  /** Optional color override for the connector line */
+  color?: string
+  /** Use straight line instead of bezier curve */
+  straight?: boolean
 }
 
-export default function ConnectorLine({ fromX, fromY, toX, toY, isFolder, targetRadius = 0, sourceRadius = 0 }: ConnectorLineProps) {
-  const strokeColor = isFolder ? '#00f0ff' : '#bf00ff'
+export default function ConnectorLine({ fromX, fromY, toX, toY, isFolder, targetRadius = 0, sourceRadius = 0, color, straight = false }: ConnectorLineProps) {
+  // Use custom color if provided, otherwise default to folder/file colors
+  const strokeColor = color || (isFolder ? '#00f0ff' : '#bf00ff')
 
   // Calculate the direction vector from source to target
   const dx = toX - fromX
@@ -20,7 +25,7 @@ export default function ConnectorLine({ fromX, fromY, toX, toY, isFolder, target
   const ndx = distance > 0 ? dx / distance : 0
   const ndy = distance > 0 ? dy / distance : 1
 
-  // Calculate start point at source circle edge
+  // Calculate start point at source edge
   let startX = fromX
   let startY = fromY
   if (sourceRadius > 0 && distance > 0) {
@@ -28,7 +33,7 @@ export default function ConnectorLine({ fromX, fromY, toX, toY, isFolder, target
     startY = fromY + ndy * sourceRadius
   }
 
-  // Calculate endpoint at target circle edge
+  // Calculate endpoint at target edge
   let endX = toX
   let endY = toY
   if (targetRadius > 0 && distance > 0) {
@@ -36,25 +41,30 @@ export default function ConnectorLine({ fromX, fromY, toX, toY, isFolder, target
     endY = toY - ndy * targetRadius
   }
 
-  // Calculate control points for smooth bezier curve
-  // Adjust control points based on direction for smooth curves
-  const effectiveDx = endX - startX
-  const effectiveDy = endY - startY
-
-  // Determine curve style based on primary direction
-  const isMoreVertical = Math.abs(effectiveDy) > Math.abs(effectiveDx)
-
-  let controlOffset: number
   let path: string
 
-  if (isMoreVertical) {
-    // Primarily vertical: use vertical-first curve
-    controlOffset = effectiveDy / 2
-    path = `M ${startX} ${startY} C ${startX} ${startY + controlOffset}, ${endX} ${endY - controlOffset}, ${endX} ${endY}`
+  if (straight) {
+    // Simple straight line
+    path = `M ${startX} ${startY} L ${endX} ${endY}`
   } else {
-    // Primarily horizontal: use horizontal-first curve
-    controlOffset = effectiveDx / 2
-    path = `M ${startX} ${startY} C ${startX + controlOffset} ${startY}, ${endX - controlOffset} ${endY}, ${endX} ${endY}`
+    // Calculate control points for smooth bezier curve
+    const effectiveDx = endX - startX
+    const effectiveDy = endY - startY
+
+    // Determine curve style based on primary direction
+    const isMoreVertical = Math.abs(effectiveDy) > Math.abs(effectiveDx)
+
+    let controlOffset: number
+
+    if (isMoreVertical) {
+      // Primarily vertical: use vertical-first curve
+      controlOffset = effectiveDy / 2
+      path = `M ${startX} ${startY} C ${startX} ${startY + controlOffset}, ${endX} ${endY - controlOffset}, ${endX} ${endY}`
+    } else {
+      // Primarily horizontal: use horizontal-first curve
+      controlOffset = effectiveDx / 2
+      path = `M ${startX} ${startY} C ${startX + controlOffset} ${startY}, ${endX - controlOffset} ${endY}, ${endX} ${endY}`
+    }
   }
 
   return (

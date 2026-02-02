@@ -11,6 +11,8 @@ interface GroupCircleProps {
   isFolder: boolean
   expandedPaths: Set<string>
   onItemClick: (item: FileSystemItem) => void
+  /** Map of folder paths to their assigned colors */
+  folderColors?: Map<string, string>
 }
 
 const ITEM_HEIGHT = 36
@@ -153,14 +155,22 @@ export function calculateRadius(itemCount: number, items?: FileSystemItem[]): nu
 }
 
 // Memoized GroupCircle to prevent re-renders during zoom/pan
-const GroupCircle = memo(function GroupCircle({ label, items, cx, cy, isFolder, expandedPaths, onItemClick }: GroupCircleProps) {
+const GroupCircle = memo(function GroupCircle({
+  label, items, cx, cy, isFolder, expandedPaths, onItemClick, folderColors
+}: GroupCircleProps) {
   if (items.length === 0) return null
 
   const strokeColor = isFolder ? '#00f0ff' : '#bf00ff'
   // Use CSS class for glow instead of inline filter for better performance
   const glowClass = isFolder ? 'group-glow-cyan' : 'group-glow-purple'
 
+  // Filter out expanded folders - they are rendered at their connector origin instead
+  const displayItems = useMemo(() => {
+    return items.filter(item => !expandedPaths.has(item.path))
+  }, [items, expandedPaths])
+
   const { nodePositions, radius } = useMemo(() => {
+    // Use all items for layout calculation to keep positions stable
     const { positions, radius } = layoutCircular(items)
 
     // Map to final screen positions (offset down slightly for label)
@@ -178,6 +188,11 @@ const GroupCircle = memo(function GroupCircle({ label, items, cx, cy, isFolder, 
     onItemClick(item)
   }, [onItemClick])
 
+  // Create a set of display item paths for quick lookup
+  const displayItemPaths = useMemo(() => {
+    return new Set(displayItems.map(item => item.path))
+  }, [displayItems])
+
   return (
     <g className={glowClass}>
       <circle
@@ -191,6 +206,7 @@ const GroupCircle = memo(function GroupCircle({ label, items, cx, cy, isFolder, 
         opacity={0.6}
       />
 
+      {/* Type label (FOLDERS / FILES) */}
       <text
         x={cx}
         y={cy - radius + 16}
@@ -204,16 +220,20 @@ const GroupCircle = memo(function GroupCircle({ label, items, cx, cy, isFolder, 
         {label}
       </text>
 
-      {nodePositions.map(({ item, x, y }) => (
-        <TreeNode
-          key={item.path}
-          item={item}
-          x={x}
-          y={y}
-          isExpanded={expandedPaths.has(item.path)}
-          onClick={() => handleItemClick(item)}
-        />
-      ))}
+      {/* Only render non-expanded items - expanded folders render at their connector origins */}
+      {nodePositions
+        .filter(({ item }) => displayItemPaths.has(item.path))
+        .map(({ item, x, y }) => (
+          <TreeNode
+            key={item.path}
+            item={item}
+            x={x}
+            y={y}
+            isExpanded={expandedPaths.has(item.path)}
+            onClick={() => handleItemClick(item)}
+            expandedColor={folderColors?.get(item.path)}
+          />
+        ))}
     </g>
   )
 })

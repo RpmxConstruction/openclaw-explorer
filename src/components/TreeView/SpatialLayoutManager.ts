@@ -21,11 +21,15 @@ export const DEFAULT_DIRECTIONS: Direction[] = [
 ]
 
 export const DEFAULT_CONSTRAINTS: LayoutConstraints = {
-  minDistance: 100,      // Minimum gap between parent edge and child edge
-  maxDistance: 400,      // Maximum distance to keep parent-child relationship clear
-  gapBetweenGroups: 40,  // Minimum gap between group circles
+  minDistance: 180,      // Minimum gap between parent edge and child edge (increased to accommodate folder node)
+  maxDistance: 500,      // Maximum distance to keep parent-child relationship clear
+  gapBetweenGroups: 50,  // Minimum gap between group circles
   viewportPadding: 50,   // Padding from screen edges
 }
+
+// Extended distance fallback constants
+const DISTANCE_INCREMENT = 80       // How much to increase distance on each retry
+const MAX_EXTENDED_DISTANCE = 500   // Maximum extra distance beyond minDistance (cutoff)
 
 /**
  * SpatialLayoutManager handles intelligent positioning of expanded folder children
@@ -177,19 +181,21 @@ export class SpatialLayoutManager {
 
   /**
    * Calculate position for children in a given direction
+   * @param extraDistance - Additional distance beyond minDistance (for fallback positioning)
    */
   calculatePositionInDirection(
     parentX: number,
     parentY: number,
     parentRadius: number,
     childRadius: number,
-    direction: Direction
+    direction: Direction,
+    extraDistance: number = 0
   ): { x: number; y: number } {
     const { minDistance } = this.config.constraints
 
     // Distance from parent center to child center
-    // = parentRadius + gap + childRadius
-    const distance = parentRadius + minDistance + childRadius
+    // = parentRadius + gap + childRadius + extraDistance (for fallback)
+    const distance = parentRadius + minDistance + childRadius + extraDistance
 
     const x = parentX + Math.cos(direction.angle) * distance
     const y = parentY + Math.sin(direction.angle) * distance
@@ -203,6 +209,7 @@ export class SpatialLayoutManager {
    * - Previously assigned direction (for consistency)
    * - Collision with existing regions
    * - Viewport bounds
+   * - Extended distance fallback when all directions at default distance collide
    */
   findBestPosition(
     folderPath: string,
@@ -211,52 +218,41 @@ export class SpatialLayoutManager {
     parentRadius: number,
     childRadius: number
   ): SpatialPosition {
-    // Check if this folder already has an assigned direction
-    const existingDirection = this.folderDirections.get(folderPath)
-
-    if (existingDirection) {
-      const pos = this.calculatePositionInDirection(
-        parentX, parentY, parentRadius, childRadius, existingDirection
-      )
-      // Still use existing direction for consistency, but mark if invalid
-      const hasCollision = this.checkCollisionWithExisting(pos.x, pos.y, childRadius)
-      const inBounds = this.checkViewportBounds(pos.x, pos.y, childRadius)
-
-      return {
-        x: pos.x,
-        y: pos.y,
-        direction: existingDirection,
-        isValid: !hasCollision && inBounds
-      }
-    }
-
     // Sort directions by priority
     const sortedDirections = [...this.config.directions].sort((a, b) => a.priority - b.priority)
 
-    // Try each direction until we find one that works
-    for (const direction of sortedDirections) {
-      const pos = this.calculatePositionInDirection(
-        parentX, parentY, parentRadius, childRadius, direction
-      )
+    // Check if this folder already has an assigned direction - try it first
+    const existingDirection = this.folderDirections.get(folderPath)
+    const directionsToTry = existingDirection
+      ? [existingDirection, ...sortedDirections.filter(d => d.name !== existingDirection.name)]
+      : sortedDirections
 
-      const hasCollision = this.checkCollisionWithExisting(pos.x, pos.y, childRadius)
-      const inBounds = this.checkViewportBounds(pos.x, pos.y, childRadius)
+    // Try at increasing distances until we find a collision-free position
+    for (let extraDistance = 0; extraDistance <= MAX_EXTENDED_DISTANCE; extraDistance += DISTANCE_INCREMENT) {
+      for (const direction of directionsToTry) {
+        const pos = this.calculatePositionInDirection(
+          parentX, parentY, parentRadius, childRadius, direction, extraDistance
+        )
 
-      if (!hasCollision && inBounds) {
-        // Found a valid position - assign this direction to the folder
-        this.folderDirections.set(folderPath, direction)
-        return {
-          x: pos.x,
-          y: pos.y,
-          direction,
-          isValid: true
+        const hasCollision = this.checkCollisionWithExisting(pos.x, pos.y, childRadius)
+        const inBounds = this.checkViewportBounds(pos.x, pos.y, childRadius)
+
+        if (!hasCollision && inBounds) {
+          // Found a valid position - assign this direction to the folder
+          this.folderDirections.set(folderPath, direction)
+          return {
+            x: pos.x,
+            y: pos.y,
+            direction,
+            isValid: true
+          }
         }
       }
     }
 
-    // No valid position found - use the first direction and mark as invalid
-    // This indicates viewport zoom-out may be needed
-    const fallbackDirection = sortedDirections[0]
+    // No valid position found even at max extended distance
+    // Use the first direction at default distance and mark as invalid
+    const fallbackDirection = directionsToTry[0]
     const pos = this.calculatePositionInDirection(
       parentX, parentY, parentRadius, childRadius, fallbackDirection
     )
@@ -275,6 +271,7 @@ export class SpatialLayoutManager {
   /**
    * Calculate position for both folder and file groups of expanded children
    * Handles the case where a folder has both folders and files as children
+   * Uses extended distance fallback when all directions at default distance collide
    */
   findPositionsForChildren(
     parentPath: string,
@@ -295,39 +292,44 @@ export class SpatialLayoutManager {
 
     // Get or determine the primary direction for this parent's children
     const existingDirection = this.folderDirections.get(parentPath)
+    const sortedDirections = [...this.config.directions].sort((a, b) => a.priority - b.priority)
+
+    // If there's an existing direction, try it first but still check for collisions
+    const directionsToTry = existingDirection
+      ? [existingDirection, ...sortedDirections.filter(d => d.name !== existingDirection.name)]
+      : sortedDirections
 
     if (hasFolders && hasFiles) {
       // Both groups - position them side by side in the assigned direction
-      // Try each direction until we find one where BOTH positions are collision-free
-      const sortedDirections = [...this.config.directions].sort((a, b) => a.priority - b.priority)
-
+      // Try each direction at increasing distances until we find collision-free positions
       let bestDirection: Direction | null = null
       let bestPositions: { folder: { x: number; y: number }; file: { x: number; y: number } } | null = null
 
-      // If there's an existing direction, try it first but still check for collisions
-      const directionsToTry = existingDirection
-        ? [existingDirection, ...sortedDirections.filter(d => d.name !== existingDirection.name)]
-        : sortedDirections
+      // Try at increasing distances until we find collision-free positions for BOTH groups
+      for (let extraDistance = 0; extraDistance <= MAX_EXTENDED_DISTANCE; extraDistance += DISTANCE_INCREMENT) {
+        for (const direction of directionsToTry) {
+          const positions = this.calculateSideBySidePositions(
+            parentX, parentY, parentRadius,
+            folderGroupRadius, fileGroupRadius,
+            direction,
+            extraDistance
+          )
 
-      // Find best direction where both groups fit without collision
-      for (const direction of directionsToTry) {
-        const positions = this.calculateSideBySidePositions(
-          parentX, parentY, parentRadius,
-          folderGroupRadius, fileGroupRadius,
-          direction
-        )
+          const folderCollides = this.checkCollisionWithExisting(positions.folder.x, positions.folder.y, folderGroupRadius)
+          const fileCollides = this.checkCollisionWithExisting(positions.file.x, positions.file.y, fileGroupRadius)
 
-        const folderCollides = this.checkCollisionWithExisting(positions.folder.x, positions.folder.y, folderGroupRadius)
-        const fileCollides = this.checkCollisionWithExisting(positions.file.x, positions.file.y, fileGroupRadius)
-
-        if (!folderCollides && !fileCollides) {
-          bestDirection = direction
-          bestPositions = positions
-          break
+          if (!folderCollides && !fileCollides) {
+            bestDirection = direction
+            bestPositions = positions
+            break
+          }
         }
+
+        // If we found valid positions, stop searching
+        if (bestDirection && bestPositions) break
       }
 
-      // Fallback to first direction if none found (all directions have collisions)
+      // Fallback to first direction at default distance if none found even at max extended distance
       if (!bestDirection) {
         bestDirection = directionsToTry[0]
         bestPositions = this.calculateSideBySidePositions(
@@ -367,19 +369,24 @@ export class SpatialLayoutManager {
   /**
    * Calculate side-by-side positions for folder and file groups
    */
+  /**
+   * @param extraDistance - Additional distance beyond minDistance (for fallback positioning)
+   */
   private calculateSideBySidePositions(
     parentX: number,
     parentY: number,
     parentRadius: number,
     folderRadius: number,
     fileRadius: number,
-    direction: Direction
+    direction: Direction,
+    extraDistance: number = 0
   ): { folder: { x: number; y: number }; file: { x: number; y: number } } {
     const { minDistance, gapBetweenGroups } = this.config.constraints
     const maxChildRadius = Math.max(folderRadius, fileRadius)
 
     // Calculate the main position in the direction
-    const distance = parentRadius + minDistance + maxChildRadius
+    // Include extraDistance for fallback positioning at extended distances
+    const distance = parentRadius + minDistance + maxChildRadius + extraDistance
     const mainX = parentX + Math.cos(direction.angle) * distance
     const mainY = parentY + Math.sin(direction.angle) * distance
 

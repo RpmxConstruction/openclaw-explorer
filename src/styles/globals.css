@@ -23,6 +23,17 @@ body {
   50% { filter: drop-shadow(0 0 16px #00f0ff); }
 }
 
+@keyframes root-pulse {
+  0%, 100% {
+    opacity: 0.15;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.25;
+    transform: scale(1.03);
+  }
+}
+
 @keyframes pulse-purple {
   0%, 100% { filter: drop-shadow(0 0 8px #bf00ff); }
   50% { filter: drop-shadow(0 0 16px #bf00ff); }
