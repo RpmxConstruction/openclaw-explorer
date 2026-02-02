@@ -1,4 +1,4 @@
-﻿import { useRef, useEffect, useCallback, useMemo, useState } from 'react'
+﻿import { useRef, useEffect, useCallback, useMemo } from 'react'
 import * as d3 from 'd3'
 import { FileSystemItem } from '../../types'
 import GroupCircle, { calculateRadius } from './GroupCircle'
@@ -7,22 +7,23 @@ import TreeNode from './TreeNode'
 import { SpatialLayoutManager } from './SpatialLayoutManager'
 
 // Neon color palette for folder identification
+// EXCLUDED: #00f0ff (default folder cyan) and #bf00ff (default file purple)
 const NEON_COLORS = [
-  '#00f0ff', // cyan
   '#ff00ff', // magenta
   '#00ff88', // green
   '#ff6600', // orange
   '#ffff00', // yellow
   '#ff0066', // pink
-  '#00ffff', // aqua
   '#ff3399', // hot pink
   '#66ff00', // lime
-  '#9933ff', // purple
-  '#00ccff', // sky blue
+  '#9933ff', // violet
   '#ff9900', // amber
   '#33ff99', // mint
   '#ff0099', // rose
   '#ccff00', // chartreuse
+  '#ff5555', // coral red
+  '#00ffcc', // turquoise
+  '#ffaa00', // gold
 ]
 
 interface TreeViewProps {
@@ -44,21 +45,30 @@ export default function TreeView({ rootItems, expandedPaths, childrenMap, onExpa
   // Create a stable SpatialLayoutManager instance
   const layoutManagerRef = useRef<SpatialLayoutManager>(new SpatialLayoutManager())
 
-  // Track assigned colors for expanded folders (persists across renders)
-  const [folderColors, setFolderColors] = useState<Map<string, string>>(new Map())
-  const colorIndexRef = useRef(0)
+  // Track assigned colors for expanded folders using useMemo to ensure all expanded folders have colors
+  // This ensures colors are assigned consistently whenever expandedPaths changes
+  const folderColors = useMemo(() => {
+    const colorMap = new Map<string, string>()
+    let colorIndex = 0
 
-  // Assign a color to a folder when it's expanded
-  const assignFolderColor = useCallback((folderPath: string) => {
-    setFolderColors(prev => {
-      if (prev.has(folderPath)) return prev
-      const newMap = new Map(prev)
-      const color = NEON_COLORS[colorIndexRef.current % NEON_COLORS.length]
-      colorIndexRef.current++
-      newMap.set(folderPath, color)
-      return newMap
-    })
-  }, [])
+    // Assign colors to all expanded folders in a deterministic order
+    // Sort the paths to ensure consistent color assignment
+    const sortedExpandedPaths = Array.from(expandedPaths).sort()
+
+    console.log('Assigning colors to expanded paths:', sortedExpandedPaths)
+
+    for (const folderPath of sortedExpandedPaths) {
+      if (!colorMap.has(folderPath)) {
+        const color = NEON_COLORS[colorIndex % NEON_COLORS.length]
+        console.log(`Assigning color ${color} to folder ${folderPath}`)
+        colorMap.set(folderPath, color)
+        colorIndex++
+      }
+    }
+
+    console.log('Final folderColors map:', Array.from(colorMap.entries()))
+    return colorMap
+  }, [expandedPaths])
 
   useEffect(() => {
     if (!svgRef.current || !gRef.current) return
@@ -155,13 +165,11 @@ export default function TreeView({ rootItems, expandedPaths, childrenMap, onExpa
   
   const handleItemClick = useCallback((item: FileSystemItem) => {
     if (item.type === 'folder') {
-      // Assign a color when folder is expanded (if not already assigned)
-      assignFolderColor(item.path)
       onExpand(item.path)
     } else {
       onFileClick(item.path)
     }
-  }, [onExpand, onFileClick, assignFolderColor])
+  }, [onExpand, onFileClick])
   
   const rootFolders = rootItems.filter(i => i.type === 'folder')
   const rootFiles = rootItems.filter(i => i.type === 'file')
@@ -360,6 +368,7 @@ export default function TreeView({ rootItems, expandedPaths, childrenMap, onExpa
 
     // Get the assigned color for this parent folder
     const parentColor = folderColors.get(parentPath)
+    console.log(`renderExpandedChildren: parentPath=${parentPath}, parentColor=${parentColor}, folderColors size=${folderColors.size}`)
     // Find the parent folder item to render it at the connector origin
     const parentFolderItem = folderByPath.get(parentPath)
 

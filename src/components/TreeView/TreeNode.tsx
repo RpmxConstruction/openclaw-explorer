@@ -19,6 +19,8 @@ const TreeNode = memo(function TreeNode({ item, x, y, isExpanded, onClick, expan
 
   // Use expanded color if provided and folder is expanded, otherwise default colors
   const strokeColor = (isExpanded && expandedColor) ? expandedColor : (isFolder ? '#00f0ff' : '#bf00ff')
+
+  console.log(`TreeNode render: ${item.name}, isExpanded=${isExpanded}, expandedColor=${expandedColor}, strokeColor=${strokeColor}`)
   const glowClass = isFolder ? 'glow-cyan-hover' : 'glow-purple-hover'
 
   // Pre-compute filter style to avoid style recalculation
@@ -53,6 +55,15 @@ const TreeNode = memo(function TreeNode({ item, x, y, isExpanded, onClick, expan
         {isFolder ? 'F ' : 'f '}{item.name}
       </text>
     </g>
+  )
+}, (prevProps, nextProps) => {
+  // Custom comparison - re-render if any of these change
+  return (
+    prevProps.item.path === nextProps.item.path &&
+    prevProps.x === nextProps.x &&
+    prevProps.y === nextProps.y &&
+    prevProps.isExpanded === nextProps.isExpanded &&
+    prevProps.expandedColor === nextProps.expandedColor
   )
 })
 
